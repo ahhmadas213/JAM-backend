@@ -14,9 +14,10 @@ from app.api.api import api_router
 from app.auth.auth_router import router as auth_router
 from app.core.config import settings
 from app.database.database import engine
-from app.database.models import Base as ModelBase
+from app.database.models.base import Base as ModelBase
 
 load_dotenv(".env")  # Load environment variables from .env file
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -62,5 +63,6 @@ if __name__ == "__main__":
         host=settings.SERVER_HOST,
         port=settings.SERVER_PORT,
         reload=settings.DEBUG,
-        workers=settings.WORKERS_COUNT
+        workers=settings.WORKERS_COUNT,
+        log_level="debug"
     )
