@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "JAM (Just A Minute)"
     VERSION: str = "1.0.0"
     API_PREFIX: str = "/api"
+    FRONTEND_URL: str = "http://localhost:3000"
 
     # Server configuration
     SERVER_HOST: str = "0.0.0.0"
@@ -27,9 +28,12 @@ class Settings(BaseSettings):
 
     # JWT and Authentication settings
     SECRET_KEY: str
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # google
+    GOOGLE_CLIENT_SECRET: str
+    GOOGLE_CLIENT_ID: str
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     ALGORITHM: str = "HS256"
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 14
     COOKIE_CONFIG: Dict[str, Any] = {
         "httponly": True,
         "secure": False,  # Set to True in production (HTTPS)

@@ -1,135 +1,180 @@
 # auth_router for user registration, login, and logout
-from fastapi import APIRouter, Depends, Response, Request, status, HTTPException, Cookie
+from app.database.models.user import User as UserModel
+from fastapi import APIRouter, Depends, status, HTTPException
 from app.database.database import get_db
-from app.core.security import create_access_token, create_refresh_token
-from app.users.user_schema import UserCreate, UserLogin, UserResponse, Token
+from app.user.user_schema import UserCreate, UserLogin, UserResponse,  AccountCreate
 from app.auth.auth_service import AuthService
-from app.core.config import settings
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database.models.user import User
-from app.dependencies import get_current_user
-from app.users.users_service import UserService
+from app.user.user_repository import UserRepository
+from app.core.security import create_access_token, create_refresh_token
+from authlib.integrations.starlette_client import OAuth  # Use Authlib
+from app.core.config import settings
+from fastapi.responses import RedirectResponse
+import logging
+from fastapi.security import OAuth2PasswordBearer  # Import OAuth2PasswordBearer
+from typing import Annotated
+from app.user.user_schema import OAuthUser
+from google.oauth2 import id_token
+# Alias to avoid confusion
+from google.auth.transport.requests import Request as GoogleRequest
+logger = logging.getLogger(__name__)
 
-router = APIRouter()
+
+router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+# Use a dummy endpoint, as it is for dependency
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
-@router.post("/signup", response_model=UserResponse)
+@router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     user: UserCreate,
     db: AsyncSession = Depends(get_db)
 ):
-    auth_service = AuthService(db)
-    return await auth_service.register_user(user)
+    try:
+        auth_service = AuthService(db)
+        response = await auth_service.create_user(user)
+        return response
+    except HTTPException as e:  # Catch HTTPErrors directly
+        raise
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred"  # Do not expose internal errors
+        )
 
 
-@router.post("/signin")
+@router.post("/signin", status_code=status.HTTP_200_OK)
 async def sign_in(
     credentials: UserLogin,
     db: AsyncSession = Depends(get_db)
 ):
     try:
-        user_service = UserService(db)
-        # Authenticate user and generate token
-        token = await user_service.signin(credentials)
-        return token  # Return the token as a response
-    # except HTTPException as e:
-    #     # Re-raise HTTPException to return the same error response
-    #     raise e
+        auth_service = AuthService(db)
+        response = await auth_service.login(credentials)
+        return response
+
+    except HTTPException as e:  # Catch HTTPErrors from the service
+        raise e
     except Exception as e:
-        # Handle unexpected errors
+        logger.exception("An unexpected error occurred: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred: {str(e)}"
+            detail="An unexpected error occurred"
         )
 
-# Add to auth_router.py
+
+@router.post("/oauth")
+async def google_callback(accountCreate: OAuthUser, db: AsyncSession = Depends(get_db)):
+
+    try:
+        user_repo = UserRepository(db)
+
+        # Verify Google ID token
+        request = GoogleRequest()
+        try:
+            idinfo = id_token.verify_oauth2_token(
+                accountCreate.id_token,
+                request,
+                settings.GOOGLE_CLIENT_ID  # Ensure token was meant for your app
+            )
+
+            # Optional: check if email in token matches email in request payload
+            if idinfo.get("email") != accountCreate.email:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Email mismatch between ID token and request payload"
+                )
+
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid Google ID token"
+            ) from e
+
+        # Check if user exists
+        user_exists = await user_repo.user_exist_by_email(accountCreate.email)
+
+        if user_exists:
+            user = await user_repo.get_user_by_email(accountCreate.email)
+            logger.info(f"User exists - user.id: {user.id}")
+
+            account = await user_repo.get_account_by_provider(user.id, accountCreate.provider)
+
+            if not account:
+                # Create account for existing user
+                account_data = AccountCreate(
+                    user_id=user.id,
+                    provider=accountCreate.provider,
+                    provider_account_id=accountCreate.providerAccountId,
+                )
+                await user_repo.create_account(account_data)
+
+        else:
+            # Create new user and account
+            new_user = UserModel(
+                email=accountCreate.email,
+                username=accountCreate.name,
+                profile_image_url=accountCreate.profileImageUrl,
+                hashed_password=None
+            )
+            user = await user_repo.create_user(new_user)
+
+            account_data = AccountCreate(
+                user_id=user.id,
+                provider=accountCreate.provider,
+                provider_account_id=accountCreate.providerAccountId,
+            )
+            await user_repo.create_account(account_data)
+
+        # Create tokens for the user (whether newly created or existing)
+        user_id_str = str(user.id)
+        access_token = create_access_token(data={"sub": user_id_str})
+        refresh_token = create_refresh_token(data={"sub": user_id_str})
+
+        # Successful login response
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        }
+
+    except ValueError as ve:
+        logger.error(f"Value error: {ve}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(ve)
+        ) from ve
+
+    except HTTPException as he:
+        logger.error(f"HTTP error: {he}")
+        raise
+
+    except Exception as e:
+        logger.exception("An unexpected error occurred: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
 
 
-# Add to FastAPI implementation
-# @router.post("/refresh")
-# async def refresh_token(
-#     request: Request,
-#     response: Response,
-#     db: AsyncSession = Depends(get_db)
-# ):
-#     refresh_token = request.cookies.get("refresh_token")
-#     if not refresh_token:
-#         raise HTTPException(status_code=401, detail="Missing refresh token")
-
-#     try:
-#         payload = decode_token(refresh_token)
-#     except HTTPException:
-#         raise HTTPException(
-#             status_code=401, detail="Invalid/expired refresh token")
-
-#     # Token rotation implementation
-#     auth_service = AuthService(db)
-#     user = await auth_service.get_user_by_email(payload["sub"])
-
-#     if not user or user.refresh_token != refresh_token:
-#         raise HTTPException(status_code=401, detail="Invalid refresh token")
-
-#     # Generate new tokens
-#     new_access_token = create_access_token({"sub": user.email})
-#     new_refresh_token = create_refresh_token({"sub": user.email})
-
-#     # Update user's refresh token in DB
-#     user.refresh_token = new_refresh_token
-#     await db.commit()
-
-#     # Set new cookies
-#     response.set_cookie(
-#         key="access_token",
-#         value=new_access_token,
-#         **settings.COOKIE_CONFIG
-#     )
-#     response.set_cookie(
-#         key="refresh_token",
-#         value=new_refresh_token,
-#         **settings.REFRESH_COOKIE_CONFIG
-#     )
-
-#     return {"message": "Tokens refreshed"}
+# Updated refresh endpoint for auth_router.py
 
 
-# @router.post("/logout")
-# async def logout(response: Response):
-#     response.delete_cookie("access_token")
-#     response.delete_cookie("refresh_token")
-#     return {"message": "Logged out"}
-
-
-# @router.get("/me", response_model=UserResponse)
-# async def get_current_user(
-#     db: AsyncSession = Depends(get_db),
-#     current_user : User = Depends(get_current_user)
-#     ):
-
-    # if not access_token:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_401_UNAUTHORIZED,
-    #         detail="Not authenticated"
-    #     )
-
-    # # Decode the token to get the user's email
-    # try:
-    #     decoded_token = decode_token(access_token)
-    # except HTTPException as e:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_401_UNAUTHORIZED,
-    #         detail="Invalid or expired token"
-    #     )
-
-    # query = select(User).filter(User.email == decoded_token["sub"])
-    # result = await db.execute(query)
-    # user = result.scalars().first()
-
-    # if not user:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_404_NOT_FOUND,
-    #         detail="User not found"
-    #     )
-
-    # return {
-
-    # }
+@router.post("/refresh")
+async def refresh_token(token: Annotated[str, Depends(oauth2_scheme)], db: AsyncSession = Depends(get_db)):
+    try:
+        auth_service = AuthService(db)
+        refreshed_token_info = await auth_service.refresh_token(token)
+        # Ensure refreshed_token_info includes expires_in
+        return {
+            "access_token": refreshed_token_info["access_token"],
+            "refresh_token": refreshed_token_info.get("refresh_token", token),  # Use new token if provided
+            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        }
+    except HTTPException as e:
+        raise
+    except Exception as e:
+        logger.exception("An unexpected error occurred: %s", e)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred")

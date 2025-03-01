@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware import Middleware
+from starlette.middleware.sessions import SessionMiddleware
 from uvicorn import run
 
 # Local application imports
@@ -33,11 +35,18 @@ async def lifespan(app: FastAPI):
     print("Shutting down...")
     await engine.dispose()
 
+middleware = [
+    # Replace "your-secret-key" with a strong, randomly generated key
+    Middleware(SessionMiddleware, secret_key="your-secret-key"),
+]
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="Your project description",
     version="1.0.0",
     lifespan=lifespan,
+    middleware=middleware,
+    root_path=settings.API_PREFIX
 )
 
 origins = [

@@ -1,28 +1,38 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.sql import func
-from app.database.models.base import Base
+from sqlalchemy import Boolean, Column, String, TIMESTAMP, Integer, ForeignKey, DateTime
+from datetime import datetime, timezone
 import uuid
+from .base import Base
+from sqlalchemy.orm import relationship
+import sqlalchemy
 
 class User(Base):
     __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True)
+    username = Column(String, index=True)
+    hashed_password = Column(String, nullable=True)  # Nullable for OAuth users
+    profile_image_url = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationship with Account
+    accounts = relationship("Account", back_populates="user")
 
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
-    username = Column(String(50), unique=True, nullable=False, index=True)
-    email = Column(String(255), unique=True, nullable=False, index=True)
-    password = Column(String(255), nullable=False)
+class Account(Base):
+    __tablename__ = "accounts"
     
-    # Profile information
-    # first_name = Column(String(50))
-    # last_name = Column(String(50))
-    # phone_number = Column(String(20))
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    provider = Column(String)  # "google", "github", etc.
+    provider_account_id = Column(String)  # ID from the provider
+
+    created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Status fields
-    is_active = Column(Boolean, default=True, nullable=False)
-    is_verified = Column(Boolean, default=False, nullable=False)
-    
-    # Timestamps
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-    last_login_at = Column(DateTime(timezone=True))
-    
+    # Relationship with User
+    user = relationship("User", back_populates="accounts")
+
+    __table_args__ = (
+        # Ensure one account per provider per user
+        sqlalchemy.UniqueConstraint('user_id', 'provider', name='uix_user_provider'),
+    )
