@@ -19,61 +19,146 @@ class AuthService:
     def __init__(self, db: AsyncSession):
         self.user_repository = UserRepository(db)
 
-    async def create_user(self, user_in: UserCreate) -> User:
+    async def create_user(self, user_in: UserCreate) -> dict:
         try:
+            # Check for existing user
             existing_user = await self.user_repository.user_exist_by_email(user_in.email)
             if existing_user:
                 raise HTTPException(
-                    # More specific status code
-                    status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "conflict",
+                        "message": "A user with this email already exists",
+                        "field": "email"
+                    }
+                )
 
-            hashed_password = get_password_hash(user_in.password)
-            # verification_token = generate_verification_token()
+            # Hash password
+            try:
+                hashed_password = get_password_hash(user_in.password)
+            except ValueError as ve:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "invalid_input",
+                        "message": f"Invalid password format: {str(ve)}",
+                        "field": "password"
+                    }
+                )
 
+            # Create new user
             new_user = User(
                 email=user_in.email,
                 username=user_in.username,
                 hashed_password=hashed_password,
             )
 
-            response = await self.user_repository.create_user(new_user)
+            try:
+                response = await self.user_repository.create_user(new_user)
+                await self.db.commit()
+                return {
+                    "id": str(response.id),
+                    "email": response.email,
+                    "is_verified": False,
+                }
+            except IntegrityError as ie:  # Assuming SQLAlchemy IntegrityError
+                await self.db.rollback()
+                logger.warning(f"Database integrity error: {str(ie)}")
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "conflict",
+                        "message": "Username or email already exists",
+                        "field": "username or email"
+                    }
+                )
+            except Exception as e:
+                await self.db.rollback()
+                logger.error(f"Database error during user creation: {str(e)}")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "error": "database_error",
+                        "message": "Unable to create user due to a database issue",
+                        "field": None
+                    }
+                )
 
-            # TODO
-            # Send verification email
-            # await self.send_verification_email(new_user.email, verification_token)
-            # await send_verification_email(user.email, verification_token)
-
-            return response
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions directly
         except ValueError as ve:
-            # Catch ValueErrors from the repository and convert to HTTPExceptions
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "invalid_input",
+                    "message": str(ve),
+                    "field": "general"
+                }
+            )
         except Exception as e:
-            logger.exception(
-                "An unexpected error occurred during user creation: %s", e)
+            logger.error(f"Unexpected error during user creation: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An unexpected error occurred"  # Don't expose internal error details
+                detail={
+                    "error": "server_error",
+                    "message": "An unexpected error occurred while processing your request",
+                    "field": None
+                }
             )
 
-    async def login(self, user_in: UserLogin):
+    async def signin(self, user_in: UserLogin) -> dict:
         try:
-            user = await self.user_repository.get_user_by_email(user_in.email)
-            # No need to check for `not user` here, as get_user_by_email will raise a ValueError.
+            # Get user by email
+            try:
+                user = await self.user_repository.get_user_by_email(user_in.email)
+            except ValueError:
+                # Assuming get_user_by_email raises ValueError when user not found
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={
+                        "error": "authentication_failed",
+                        "message": "Invalid email or password",
+                        "field": "email"
+                    }
+                )
 
-            # TODO remember to uncommited this for email verification
+            # Check email verification (uncomment when ready)
             # if not user.is_verified:
             #     raise HTTPException(
-            #         status_code=400, detail="Email not verified")
+            #         status_code=status.HTTP_403_FORBIDDEN,
+            #         detail={
+            #             "error": "account_unverified",
+            #             "message": "Please verify your email before signing in",
+            #             "field": "email"
+            #         }
+            #     )
 
+            # Verify password
             if not verify_password(user_in.password, user.hashed_password):
                 raise HTTPException(
-                    # 401 for auth failure
-                    status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={
+                        "error": "authentication_failed",
+                        "message": "Invalid email or password",
+                        "field": "password"
+                    }
+                )
 
-            access_token = create_access_token(
-                data={"sub": str(user.id)})  # Ensure string ID
-            refresh_token = create_refresh_token(data={"sub": str(user.id)})
+            # Generate tokens
+            try:
+                access_token = create_access_token(data={"sub": str(user.id)})
+                refresh_token = create_refresh_token(
+                    data={"sub": str(user.id)})
+            except Exception as e:
+                logger.error(f"Token generation failed: {str(e)}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={
+                        "error": "token_generation_failed",
+                        "message": "Unable to generate authentication tokens",
+                        "field": None
+                    }
+                )
 
             return {
                 "access_token": access_token,
@@ -87,17 +172,18 @@ class AuthService:
                     "profile_image_url": user.profile_image_url
                 }
             }
-        except ValueError as ve:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
-        except HTTPException as e:
-            raise  # Re-raise HTTP exceptions
+
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions directly
         except Exception as e:
-            logger.exception(
-                "An unexpected error occurred during login: %s", e)
+            logger.error(f"Unexpected error during signin: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="An unexpected error occurred"
+                detail={
+                    "error": "server_error",
+                    "message": "An unexpected error occurred during sign-in",
+                    "field": None
+                }
             )
 
     async def verify_user(self, token: str):

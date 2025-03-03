@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     ALGORITHM: str = "HS256"
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 14
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     COOKIE_CONFIG: Dict[str, Any] = {
         "httponly": True,
         "secure": False,  # Set to True in production (HTTPS)
