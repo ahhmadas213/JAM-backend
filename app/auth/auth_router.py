@@ -98,13 +98,15 @@ async def google_callback(accountCreate: OAuthUser, db: AsyncSession = Depends(g
         user_repo = UserRepository(db)
 
         # Verify Google ID token
-        logger.info(f"Verifying Google ID token for email: {accountCreate.email}")
+        logger.info(
+            f"Verifying Google ID token for email: {accountCreate.email}")
         try:
             request = google_requests.Request()
             idinfo = id_token.verify_oauth2_token(
                 accountCreate.id_token,
                 request,
-                settings.GOOGLE_CLIENT_ID
+                settings.GOOGLE_CLIENT_ID,
+                clock_skew_in_seconds=10
             )
             logger.info(f"Verified Google ID token: {idinfo}")
 
