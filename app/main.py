@@ -1,22 +1,25 @@
-# main.py file
+# main.py
 
 # Standard library imports
+import secrets
+from app.database.models.base import Base as ModelBase
+from app.database.database import engine
+from app.core.config import settings
+from app.api.auth_router import router as auth_router
+from app.api.api import api_router
+from uvicorn import run
+from starlette.middleware.sessions import SessionMiddleware  # Ensure this is imported
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request, Response
 from contextlib import asynccontextmanager
+import logging
+from app.core.config import settings
 
 # Third-party imports
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware import Middleware
-from starlette.middleware.sessions import SessionMiddleware
-from uvicorn import run
 
-# Local application imports
-from app.api.api import api_router
-from app.auth.auth_router import router as auth_router
-from app.core.config import settings
-from app.database.database import engine
-from app.database.models.base import Base as ModelBase
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 load_dotenv(".env")  # Load environment variables from .env file
 
@@ -24,41 +27,52 @@ load_dotenv(".env")  # Load environment variables from .env file
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    print("Starting up...")
-    async with engine.begin() as conn:
-        await conn.run_sync(ModelBase.metadata.create_all)
-    print("Tables created...")
+    logger.debug("Starting up...")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(ModelBase.metadata.create_all)
+        logger.debug("Tables created...")
+    except Exception as e:
+        logger.error(f"Error during startup: {e}")
+        raise
 
     yield  # Server is running and handling requests
 
     # Shutdown
-    print("Shutting down...")
+    logger.debug("Shutting down...")
     await engine.dispose()
 
-middleware = [
-    # Replace "your-secret-key" with a strong, randomly generated key
-    Middleware(SessionMiddleware, secret_key="your-secret-key"),
-]
+# Generate a secure secret key for session middleware
+secret_key = secrets.token_hex(32)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="Your project description",
     version="1.0.0",
     lifespan=lifespan,
-    middleware=middleware,
     root_path=settings.API_PREFIX
 )
 
+# Add SessionMiddleware
+
+# Add CORS middleware
+
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.SECRET_KEY,
+    same_site="lax",
+    # secure=False,
+    path="/api/auth",
+)
 origins = [
-    "http://localhost",
-    "http://localhost:3000",  # React default port
-    "http://localhost:8000",  # FastAPI default port
+    "https://localhost:3000",  # Your Next.js frontend URL
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=True,  # Must be True to allow cookies
     allow_methods=["*"],
     allow_headers=["*"],
 )

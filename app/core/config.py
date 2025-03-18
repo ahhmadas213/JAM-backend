@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     API_PREFIX: str = "/api"
     FRONTEND_URL: str = "http://localhost:3000"
+    ENVIRONMENT: str
 
     # Server configuration
     SERVER_HOST: str = "0.0.0.0"
@@ -40,13 +41,12 @@ class Settings(BaseSettings):
         "samesite": "lax",
         "max_age": 604800,  # 7 days in seconds
         "path": "/",
-        "domain": "localhost",  # Change in production!
     }
 
     # CORS
     BACKEND_CORS_ORIGINS: List[HttpUrl] = [
         "http://localhost:3000",  # Your Next.js app
-        "http://localhost:8000",  # Your FastAPI backend (for direct testing)
+        "http://127.0.0.1:8000",  # Your FastAPI backend (for direct testing)
     ]
 
     # Logging

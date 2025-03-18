@@ -6,9 +6,11 @@ from datetime import datetime
 
 
 class UserResponse(BaseModel):
+    name: str
     id: str
     email: EmailStr
-    is_verified: bool
+    profile_image_url: Optional[str]
+
 
     class Config:
         from_attributes = True
@@ -21,19 +23,16 @@ class UserLogin(BaseModel):
 
 class UserUpdate(BaseModel):
     email: Union[EmailStr, None] = None
-    username: Union[str, None] = None
-
+    name: Union[str, None] = None
+    profile_image_url: Union[str, None] = None
     class Config:
         from_attributes = True
 
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-
 class TokenData(BaseModel):
     id: Union[str, None] = None
+    email: str | None = None  # Optional fields as needed
+    roles: list[str] | None = None  # Example: for authorization
 
 
 class AccountBase(BaseModel):
@@ -56,7 +55,7 @@ class Account(AccountBase):
 
 class UserBase(BaseModel):
     email: str
-    username: str | None = None
+    name: str | None = None
 
 
 class UserCreate(UserBase):
@@ -67,16 +66,8 @@ class User(UserBase):
     id: int
     is_active: bool
     created_at: datetime
-    accounts: List[Account]
 
     class Config:
         from_attributes = True
 
 
-class OAuthUser(BaseModel):
-    provider: str
-    providerAccountId: str
-    name: str
-    email: EmailStr
-    profileImageUrl: Optional[str]
-    id_token: str

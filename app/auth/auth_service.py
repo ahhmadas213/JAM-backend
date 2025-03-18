@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, verify_refresh_token, verify_password
 import logging
 from jose import jwt, JWTError
-
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class AuthService:
             # Create new user
             new_user = User(
                 email=user_in.email,
-                username=user_in.username,
+                name=user_in.name,
                 hashed_password=hashed_password,
             )
 
@@ -144,34 +144,7 @@ class AuthService:
                     }
                 )
 
-            # Generate tokens
-            try:
-                access_token = create_access_token(data={"sub": str(user.id)})
-                refresh_token = create_refresh_token(
-                    data={"sub": str(user.id)})
-            except Exception as e:
-                logger.error(f"Token generation failed: {str(e)}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail={
-                        "error": "token_generation_failed",
-                        "message": "Unable to generate authentication tokens",
-                        "field": None
-                    }
-                )
-
-            return {
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-                "token_type": "bearer",
-                "user": {
-                    "username": user.username,
-                    "email": user.email,
-                    "id": str(user.id),
-                    "profile_image_url": user.profile_image_url
-                }
-            }
+            return user
 
         except HTTPException:
             raise  # Re-raise HTTP exceptions directly
@@ -229,50 +202,55 @@ class AuthService:
     # auth service
 
     # Add this to your auth_service.py file:
-
     async def refresh_token(self, refresh_token: str) -> dict:
         """
-        Refresh the access token using a valid refresh token.
+        Refresh the access token using a valid refresh token, preserving email in the payload.
         """
+        credentials_exception = HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
         try:
-            # Verify the refresh token
-            payload = jwt.decode(
-                refresh_token,
-                settings.SECRET_KEY,
-                algorithms=[settings.ALGORITHM]
-            )
+            # Verify the refresh token and get TokenData payload
+            payload = verify_refresh_token(
+                refresh_token, credentials_exception)
 
-            # Extract user ID from token payload
-            user_id = payload.get("sub")
-            if user_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid token"
-                )
+            user_id = payload.id            
+            # Check if the user exists
 
-            # Convert user_id to UUID (if necessary) and get the user
             user = await self.user_repository.get_user_by_id(user_id)
             if not user:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
+                    status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="User not found"
                 )
-
-            # Create new tokens
-            user_id_str = str(user.id)
-            access_token = create_access_token(data={"sub": user_id_str})
-            new_refresh_token = create_refresh_token(data={"sub": user_id_str})
-
-            # Return tokens and user data
+            
+            
+            access_token = create_access_token(
+                subject=str(user.id)
+            )
+        
+            refresh_token = create_refresh_token(
+                subject=str(user.id)
+            )
+    
             return {
                 "access_token": access_token,
-                "refresh_token": new_refresh_token,
+                "refresh_token": refresh_token,
+                "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+                "user" : {
+                    "name" : user.name,
+                    "email" : user.email,
+                    "id" : user.id,
+                    "profile_image_url" : user.profile_image_url
+                }
             }
 
         except JWTError:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired token"
+                detail="Invalid or expired refresh token"
             )
         except Exception as e:
             logger.exception("Error refreshing token: %s", e)

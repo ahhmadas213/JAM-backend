@@ -1,6 +1,7 @@
+# user repository
 from app.database.base_repository import BaseRepository
 from app.user.user_schema import UserCreate
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update, func, exists
 from app.database.models.user import User as UserModel
 from app.database.models.user import Account
 from app.user.user_schema import AccountCreate
@@ -39,16 +40,13 @@ class UserRepository(BaseRepository):
 
     async def user_exist_by_email(self, email: str) -> bool:
         try:
-            query = select(UserModel).where(
-                func.lower(UserModel.email) == email.lower())
-            result = await self.db.execute(query)
-            user = result.scalar_one_or_none()
-            return bool(user)
+            query = exists().where(func.lower(UserModel.email) == email.lower())
+            result = await self.db.execute(select(query))
+            return result.scalar()
         except SQLAlchemyError as e:
-            logger.error(
-                f"SQLAlchemyError: Error checking user existence: {e}")
-            raise ValueError(
-                f"Database error while checking user existence.") from e
+            logger.error(f"SQLAlchemyError: Error checking user existence: {e}")
+            raise ValueError(f"Database error while checking user existence.") from e
+        
 
     async def get_user_by_email(self, email: str) -> UserModel:
         try:
@@ -68,9 +66,8 @@ class UserRepository(BaseRepository):
 
     async def get_user_by_id(self, user_id: str):
         try:
-            # Convert string id to integer
-            int_id = int(user_id) if isinstance(user_id, str) else user_id
-            query = select(UserModel).where(UserModel.id == int_id)
+
+            query = select(UserModel).where(UserModel.id == user_id)
             result = await self.db.execute(query)
             user = result.scalar_one_or_none()
             if not user:
@@ -91,10 +88,10 @@ class UserRepository(BaseRepository):
             raise ValueError(
                 f"Database error while fetching user by ID.") from e
 
-    async def get_account_by_provider(self, user_id: int, provider: str):
+    async def get_account_by_provider(self, provider_account_id: int, provider: str):
         try:
             query = select(Account).where(
-                Account.user_id == user_id, Account.provider == provider)
+                Account.provider_account_id == provider_account_id, Account.provider == provider)
             result = await self.db.execute(query)
             return result.scalar_one_or_none()  # Returns None if not found
         except SQLAlchemyError as e:
@@ -102,7 +99,15 @@ class UserRepository(BaseRepository):
                 f"SQLAlchemyError: Error fetching account by provider: {e}")
             raise ValueError(
                 f"Database error while fetching account by provider.") from e
-        
+
+    async def get_user_from_account(self, account: Account) -> UserModel:
+        try :
+            query = select(UserModel).filter(UserModel.id == account.user_id)
+            result = await self.db.execute(query)
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as e:
+            raise ValueError(
+                f"Database error while fetching user from account.") from e
 
 
     async def create_account(self, account_data: AccountCreate) -> Account:
